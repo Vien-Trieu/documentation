@@ -58,3 +58,30 @@ body {
   .header, .card { box-shadow: none; border: 1px solid #ddd; border-radius: 0; }
   .print-hide { display: none !important; }
 }
+
+/* --- PDF resume helpers --- */
+.print-only { display: none; }
+
+@media print {
+  .print-only {
+    display: block;
+  }
+  /* A tiny, low-visibility line anchored at the bottom so it prints as text */
+  .print-embed {
+    position: fixed;         /* ensures it lands on page 1 */
+    bottom: 4px;
+    left: 6px;
+    right: 6px;
+    font-size: 2px;          /* tiny but still text */
+    line-height: 2px;
+    color: #000;             /* must be “real” text color for text layer */
+    opacity: 0.1;            /* faint; still keeps text selectable */
+    white-space: pre-wrap;   /* allow line breaks without hyphenation */
+    word-break: break-all;   /* reduce wrap artifacts */
+  }
+}
+/* Required field error style (matches your theme) */
+.input-error {
+  border-color: #ef4444 !important;
+  box-shadow: 0 0 0 3px rgba(239,68,68,.12);
+}

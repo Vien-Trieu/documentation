@@ -1,19 +1,19 @@
-import React, { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import * as pdfjsLib from "pdfjs-dist";
+import pdfjsWorker from "pdfjs-dist/build/pdf.worker?url";
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 /**
  * LV RIR Breaker using an E-MAX Circuit Breaker – Production Testing Form
- * Simple, portable React app that mirrors the uploaded PDF.
- * - No external UI libs; just Tailwind utility classes.
- * - Save/Load JSON locally (works offline).
- * - Print to paper or PDF via the browser (Ctrl/Cmd+P).
- * - Minimal validation; designed for shop-floor use.
- * - Single-file component for easy copy/paste into Vite (or CRA).
-
-// ---------- Small UI helpers ----------
-
- * Minimal single-file version (no Tailwind, just CSS classes in index.css).
- * - Save/Load JSON locally
- * - Print from browser
+ * - Save to PDF via the browser print dialog (Ctrl/Cmd+P).
+ * - Resume from PDF: upload a PDF saved from this app to continue editing.
+ * - Apparatus Type dropdown (no free-typing)
+ * - Device Serial # and Customer Order # required
+ * - ABB branding and Document No. + Revision
+ *
+ * Payload embed method:
+ * - Invisible zero-width characters (no visible "DATA:: ... ::END").
+ * - Import supports both zero-width payloads AND the older DATA::...::END base64.
  */
 
 type PFNType = "PASS" | "FAIL" | "N/A";
@@ -86,6 +86,48 @@ type FormData = {
   signoff: { inspector: string; date: string; signature: string };
 };
 
+// ---------- UI bits ----------
+const Label = ({ children, htmlFor, className }: any) => (
+  <label className={`label ${className ?? ""}`} htmlFor={htmlFor}>{children}</label>
+);
+const TextInput = ({ id, value, onChange, placeholder, type="text", required=false, hasError=false }: any) => (
+  <input
+    id={id}
+    value={value}
+    onChange={onChange}
+    placeholder={placeholder}
+    className={`input${hasError ? " input-error" : ""}`}
+    type={type}
+    aria-required={required}
+  />
+);
+const NumberInput = (p: any) => <TextInput {...p} type="number" />;
+const TextArea = ({ id, value, onChange, rows=4, placeholder }: any) => (
+  <textarea id={id} value={value} onChange={onChange} rows={rows} placeholder={placeholder} className="textarea"/>
+);
+const SelectInput = ({ id, value, onChange, options, required=false, hasError=false }: any) => (
+  <select
+    id={id}
+    value={value}
+    onChange={onChange}
+    className={`input${hasError ? " input-error" : ""}`}
+    aria-required={required}
+  >
+    <option value="" disabled>Select an option</option>
+    {options.map((o: string) => <option key={o} value={o}>{o}</option>)}
+  </select>
+);
+const PFN = ({ value, onChange, name }: { value: PFNType; onChange:(v:PFNType)=>void; name:string }) => (
+  <div className="pills">
+    {(["PASS","FAIL","N/A"] as PFNType[]).map(opt => (
+      <label key={opt} style={{display:"inline-flex",alignItems:"center",gap:8}}>
+        <input type="radio" name={name} value={opt} checked={value===opt} onChange={e=>onChange(e.target.value as PFNType)} />
+        <span>{opt}</span>
+      </label>
+    ))}
+  </div>
+);
+
 const tripRows: { key: TripKey; label: string }[] = [
   { key: "longTimePickup", label: "Long-time Pickup (I1 = __ In)" },
   { key: "longTimeDelay", label: "Long-time Delay (I1 = __ In)" },
@@ -96,27 +138,6 @@ const tripRows: { key: TripKey; label: string }[] = [
   { key: "groundPickup", label: "Ground Pickup (I4 = __ In)" },
   { key: "groundDelay", label: "Ground Delay (I4 = __ In)" },
 ];
-
-const Label = ({ children, htmlFor }: any) => (
-  <label className="label" htmlFor={htmlFor}>{children}</label>
-);
-const TextInput = ({ id, value, onChange, placeholder, type="text" }: any) => (
-  <input id={id} value={value} onChange={onChange} placeholder={placeholder} className="input" type={type}/>
-);
-const NumberInput = (p: any) => <TextInput {...p} type="number" />;
-const TextArea = ({ id, value, onChange, rows=4, placeholder }: any) => (
-  <textarea id={id} value={value} onChange={onChange} rows={rows} placeholder={placeholder} className="textarea"/>
-);
-const PFN = ({ value, onChange, name }: { value: PFNType; onChange:(v:PFNType)=>void; name:string }) => (
-  <div className="pills">
-    {["PASS","FAIL","N/A"].map(opt => (
-      <label key={opt} style={{display:"inline-flex",alignItems:"center",gap:8}}>
-        <input type="radio" name={name} value={opt} checked={value===opt} onChange={e=>onChange(e.target.value as PFNType)} />
-        <span>{opt}</span>
-      </label>
-    ))}
-  </div>
-);
 
 function TripRow({ row, data, onChange } : { row:{key:TripKey; label:string}; data:TripRowData; onChange:(v:TripRowData)=>void }) {
   const set = (k: keyof TripRowData, v: any) => onChange({ ...data, [k]: v });
@@ -148,73 +169,299 @@ function TripRow({ row, data, onChange } : { row:{key:TripKey; label:string}; da
   );
 }
 
+/* ----------------- data helpers ----------------- */
+function defaultTripRow(): TripRowData {
+  return { settings: "", criteria: "", phaseA: "", phaseB: "", phaseC: "" };
+}
+function defaultFormData(): FormData {
+  return {
+    header: { apparatusType: "", deviceSerial: "", customerOrder: "", customerPO: "" },
+    section1: { vacA: null, vacB: null, vacC: null, resultA: "N/A", resultB: "N/A", resultC: "N/A" },
+    section1_1: "N/A",
+    section1_2: "N/A",
+    section2: {
+      PR1: "", notes: "",
+      longTimePickup: defaultTripRow(),
+      longTimeDelay: defaultTripRow(),
+      shortTimePickup: defaultTripRow(),
+      shortTimeDelay: defaultTripRow(),
+      instPickup: defaultTripRow(),
+      instDelay: defaultTripRow(),
+      groundPickup: defaultTripRow(),
+      groundDelay: defaultTripRow(),
+    },
+    section3: { verify2k1: "N/A" },
+    section4: { manualOps: "N/A", eOpenMin: "N/A" },
+    section5: {
+      eo2Manual: "N/A", eo5ChargeMin: "N/A", eo5CloseMin: "N/A", eo5OpenMin: "N/A",
+      eo5ChargeMax: "N/A", eo5CloseMax: "N/A", eo5OpenMax: "N/A", eo2AntiPump: "N/A",
+    },
+    section6: { maxPickup: "N/A", maxDropout: "N/A", timeDelay: "N/A" },
+    section7: { rows: [{ label: "", a: null, b: null, c: null }] },
+    section8: { disconnectToTest: "N/A", testToConnect: "N/A", connectToTest: "N/A", testToDisconnect: "N/A", preventRemoval: "N/A" },
+    section9: { visual: "N/A" },
+    section10: { diagram: "", result: "N/A" },
+    section11: { counter: null },
+    comments: "",
+    signoff: { inspector: "", date: "", signature: "" },
+  };
+}
+function setAtPath(obj: any, path: string, value: any) {
+  const parts = path.split(".");
+  let cur = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const p = parts[i];
+    if (!(p in cur)) cur[p] = {};
+    cur = cur[p];
+  }
+  cur[parts[parts.length - 1]] = value;
+  return obj;
+}
+function toNumber(v: any): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+function deepMerge(target: any, source: any) {
+  if (typeof source !== "object" || source === null) return target;
+  const output = Array.isArray(target) ? [...target] : { ...target };
+  for (const key of Object.keys(source)) {
+    if (Array.isArray(source[key])) output[key] = source[key];
+    else if (typeof source[key] === "object" && source[key] !== null) output[key] = deepMerge(target[key] ?? {}, source[key]);
+    else output[key] = source[key];
+  }
+  return output;
+}
+function mergeWithDefault(loaded: any): FormData {
+  return deepMerge(defaultFormData(), loaded);
+}
+
+/* ----------------- invisible (zero-width) PDF payload helpers ----------------- */
+// Zero-width chars: 0 = U+200B, 1 = U+200C, sentinel = U+200D U+200D
+const ZW0 = "\u200b";        // zero width space
+const ZW1 = "\u200c";        // zero width non-joiner
+const ZWS = "\u200d\u200d";  // sentinel (double joiner)
+
+/** Encode JSON -> base64 -> bits -> zero-width string with sentinels */
+function encodeZW(jsonStr: string): string {
+  const b64 = btoa(jsonStr);
+  const bits = Array.from(b64)
+    .map(ch => ch.charCodeAt(0).toString(2).padStart(8, "0"))
+    .join("");
+  const body = bits.replace(/0/g, ZW0).replace(/1/g, ZW1);
+  return ZWS + body + ZWS;
+}
+
+/** Extract zero-width payload from arbitrary text and decode to JSON string */
+function decodeZWFromText(text: string): string | null {
+  const zwOnly = text.replace(/[^\u200b\u200c\u200d]/g, "");
+  const parts = zwOnly.split(ZWS).filter(Boolean);
+  if (!parts.length) return null;
+  const bits = parts[0].replace(new RegExp(ZW0, "g"), "0").replace(new RegExp(ZW1, "g"), "1");
+  if (bits.length % 8 !== 0) return null;
+  const b64 = bits.match(/.{8}/g)!.map(byte => String.fromCharCode(parseInt(byte, 2))).join("");
+  try {
+    return atob(b64);
+  } catch {
+    return null;
+  }
+}
+
+/** Legacy fallback: support older PDFs that used DATA::...::END base64 text */
+function tryLegacyDataBlock(text: string): string | null {
+  const m = text.match(/DATA::([\s\S]*?)::END/);
+  if (!m) return null;
+  const base64 = m[1].replace(/[^A-Za-z0-9+/=]/g, "");
+  try {
+    return atob(base64);
+  } catch {
+    return null;
+  }
+}
+
 export default function App() {
   const empty = useMemo(() => defaultFormData(), []);
   const [data, setData] = useState<FormData>(empty);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [errors, setErrors] = useState<{[k:string]: boolean}>({});
+  const pdfRef = useRef<HTMLInputElement>(null);
+  const serialRef = useRef<HTMLInputElement>(null);
+  const orderRef = useRef<HTMLInputElement>(null);
 
   const update = (path: string, value: any) => {
     setData((d) => setAtPath(structuredClone(d), path, value));
+    if (path === "header.deviceSerial" || path === "header.customerOrder" || path === "header.apparatusType") {
+      setErrors((e) => ({ ...e, [path]: false }));
+    }
   };
 
-  const handleSave = () => {
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `lv-rir-breaker-form_${new Date().toISOString().slice(0,10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+  // Validate required fields before printing
+  const validateRequired = () => {
+    const newErr: {[k:string]: boolean} = {};
+    if (!data.header.apparatusType) newErr["header.apparatusType"] = true;
+    if (!data.header.deviceSerial.trim()) newErr["header.deviceSerial"] = true;
+    if (!data.header.customerOrder.trim()) newErr["header.customerOrder"] = true;
+    setErrors(newErr);
+    if (newErr["header.deviceSerial"] && serialRef.current) serialRef.current.focus();
+    else if (newErr["header.customerOrder"] && orderRef.current) orderRef.current.focus();
+    return Object.keys(newErr).length === 0;
   };
 
-  const handleLoad = (file?: File) => {
-    const f = file || fileRef.current?.files?.[0];
+  // Save as PDF (browser print). Remind to disable headers/footers to hide page URL/footer.
+  const saveAsPdf = () => {
+    if (!validateRequired()) {
+      alert("Please complete required fields (*) before saving as PDF.");
+      return;
+    }
+    alert("Tip: In the print dialog, uncheck 'Headers and footers' so the URL/footer doesn't appear in the PDF.");
+    window.print();
+  };
+
+  // Resume from a PDF saved by this app
+  const handlePdfImport = async (file?: File) => {
+    const f = file || pdfRef.current?.files?.[0];
     if (!f) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const loaded = JSON.parse(String(reader.result));
-        setData(mergeWithDefault(loaded));
-      } catch {
-        alert("Could not read JSON file.");
+
+    try {
+      const arrayBuf = await f.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuf }).promise;
+
+      let text = "";
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        text += content.items.map((it: any) => ("str" in it ? it.str : (it as any).toString())).join(" ");
+        text += "\n";
       }
-    };
-    reader.readAsText(f);
+
+      // First try invisible zero-width payload
+      let jsonStr = decodeZWFromText(text);
+
+      // Fallback to legacy DATA::...::END if needed
+      if (!jsonStr) jsonStr = tryLegacyDataBlock(text);
+
+      if (!jsonStr) {
+        alert("No embedded data found in this PDF. Ensure it was saved from this app and not 'printed as image'.");
+        return;
+      }
+
+      const loaded = JSON.parse(jsonStr);
+      setData(mergeWithDefault(loaded));
+      alert("Form data restored from PDF.");
+    } catch (err) {
+      console.error(err);
+      alert("Could not read data from PDF.");
+    } finally {
+      if (pdfRef.current) pdfRef.current.value = "";
+    }
   };
 
-  const reset = () => setData(empty);
+  const reset = () => {
+    setData(empty);
+    setErrors({});
+  };
+
+  // Encoded invisible payload for print-only embedding
+  const invisiblePayload = useMemo(() => encodeZW(JSON.stringify(data)), [data]);
+
+  // Apparatus dropdown options (customize as needed)
+  const apparatusOptions = ["Emax2", "EGG", "Eaton", "Siemens", "GE"];
 
   return (
     <div className="container">
-      {/* Header */}
+      {/* Inline helpers for print-only and error styles (works even if CSS file isn't updated) */}
+      <style>{`
+        .input-error { border-color: #ef4444 !important; box-shadow: 0 0 0 3px rgba(239,68,68,.12); }
+        .req::after { content:" *"; color:#ef4444; }
+        .print-only { display: none; }
+        @media print {
+          @page { margin: 12mm; } /* keeps content inside printable area */
+          .print-hide { display: none !important; }
+          .print-only { display: block; }
+        }
+      `}</style>
+
+      {/* Header with ABB branding and document block */}
       <div className="header">
-        <h1 className="h1">Production Testing Form</h1>
+        <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", gap:12}}>
+          {/* ABB brand */}
+          <div style={{display:"flex", alignItems:"center", gap:10}}>
+            <div
+              aria-label="ABB"
+              style={{ fontWeight: 900, fontSize: 26, color: "#e10600", letterSpacing: 1 }}
+            >
+              ABB
+            </div>
+            <div className="subtle">Low Voltage RIR Breaker – Production Testing</div>
+          </div>
+
+          {/* Document info */}
+          <div style={{textAlign:"right", fontSize:13}}>
+            <div><strong>Document No.:</strong> F-INSP-61-01</div>
+            <div><strong>Revision:</strong> D</div>
+            <div><strong>Rev Date:</strong> 2025-05-21</div>
+          </div>
+        </div>
+
+        {/* Main title */}
+        <h1 className="h1" style={{marginTop:10}}>Production Testing Form</h1>
         <div className="subtle">LV RIR Breaker using an E-MAX Circuit Breaker</div>
+
+        {/* Header fields */}
         <div className="grid grid-4" style={{marginTop:10}}>
           <div>
-            <Label>Apparatus Type</Label>
-            <TextInput value={data.header.apparatusType} onChange={(e:any)=>update("header.apparatusType", e.target.value)} />
+            <Label className="req">Apparatus Type</Label>
+            <SelectInput
+              id="apparatusType"
+              value={data.header.apparatusType}
+              onChange={(e:any)=>update("header.apparatusType", e.target.value)}
+              options={apparatusOptions}
+              required
+              hasError={!!errors["header.apparatusType"]}
+            />
           </div>
           <div>
-            <Label>Device Serial #</Label>
-            <TextInput value={data.header.deviceSerial} onChange={(e:any)=>update("header.deviceSerial", e.target.value)} />
+            <Label className="req">Device Serial #</Label>
+            <TextInput
+              id="deviceSerial"
+              value={data.header.deviceSerial}
+              onChange={(e:any)=>update("header.deviceSerial", e.target.value)}
+              required
+              hasError={!!errors["header.deviceSerial"]}
+              ref={serialRef as any}
+            />
           </div>
           <div>
-            <Label>Customer Order #</Label>
-            <TextInput value={data.header.customerOrder} onChange={(e:any)=>update("header.customerOrder", e.target.value)} />
+            <Label className="req">Customer Order #</Label>
+            <TextInput
+              id="customerOrder"
+              value={data.header.customerOrder}
+              onChange={(e:any)=>update("header.customerOrder", e.target.value)}
+              required
+              hasError={!!errors["header.customerOrder"]}
+              ref={orderRef as any}
+            />
           </div>
           <div>
             <Label>Customer PO</Label>
-            <TextInput value={data.header.customerPO} onChange={(e:any)=>update("header.customerPO", e.target.value)} />
+            <TextInput
+              id="customerPO"
+              value={data.header.customerPO}
+              onChange={(e:any)=>update("header.customerPO", e.target.value)}
+            />
           </div>
         </div>
+
         <div style={{display:"flex", gap:8, marginTop:12}} className="print-hide">
-          <button className="btn" onClick={handleSave}>Save JSON</button>
+          <button className="btn" onClick={saveAsPdf}>Save as PDF</button>
           <label className="btn" style={{cursor:"pointer"}}>
-            Load JSON
-            <input ref={fileRef} type="file" accept="application/json" style={{display:"none"}} onChange={(e)=>handleLoad(e.target.files?.[0] ?? undefined)} />
+            Resume from PDF
+            <input
+              ref={pdfRef}
+              type="file"
+              accept="application/pdf"
+              style={{display:"none"}}
+              onChange={(e)=>handlePdfImport(e.target.files?.[0] ?? undefined)}
+            />
           </label>
-          <button className="btn" onClick={()=>window.print()}>Print / Save as PDF</button>
           <button className="btn" onClick={reset}>Reset</button>
         </div>
       </div>
@@ -442,7 +689,7 @@ export default function App() {
       </div>
 
       {/* Comments & Signoff */}
-      <div className="card">
+      <div className="card" style={{marginBottom:40}}>
         <h2 className="h1" style={{fontSize:18}}>Additional Testing / Comments</h2>
         <TextArea value={data.comments} onChange={(e:any)=>update("comments", e.target.value)} rows={6} placeholder="Add any additional testing notes, observations, or comments here."/>
       </div>
@@ -465,72 +712,11 @@ export default function App() {
         </div>
         <p className="muted" style={{marginTop:8}}>Procedure Number and Revision: F-INSP-61-01, REV D (05/21/2025)</p>
       </div>
+
+      {/* Invisible, print-only zero-width payload at end of document */}
+      <div className="print-only">
+        <span>{invisiblePayload}</span>
+      </div>
     </div>
   );
-}
-
-/* ----------------- helpers ----------------- */
-function defaultTripRow(): TripRowData {
-  return { settings: "", criteria: "", phaseA: "", phaseB: "", phaseC: "" };
-}
-function defaultFormData(): FormData {
-  return {
-    header: { apparatusType: "", deviceSerial: "", customerOrder: "", customerPO: "" },
-    section1: { vacA: null, vacB: null, vacC: null, resultA: "N/A", resultB: "N/A", resultC: "N/A" },
-    section1_1: "N/A",
-    section1_2: "N/A",
-    section2: {
-      PR1: "", notes: "",
-      longTimePickup: defaultTripRow(),
-      longTimeDelay: defaultTripRow(),
-      shortTimePickup: defaultTripRow(),
-      shortTimeDelay: defaultTripRow(),
-      instPickup: defaultTripRow(),
-      instDelay: defaultTripRow(),
-      groundPickup: defaultTripRow(),
-      groundDelay: defaultTripRow(),
-    },
-    section3: { verify2k1: "N/A" },
-    section4: { manualOps: "N/A", eOpenMin: "N/A" },
-    section5: {
-      eo2Manual: "N/A", eo5ChargeMin: "N/A", eo5CloseMin: "N/A", eo5OpenMin: "N/A",
-      eo5ChargeMax: "N/A", eo5CloseMax: "N/A", eo5OpenMax: "N/A", eo2AntiPump: "N/A",
-    },
-    section6: { maxPickup: "N/A", maxDropout: "N/A", timeDelay: "N/A" },
-    section7: { rows: [{ label: "", a: null, b: null, c: null }] },
-    section8: { disconnectToTest: "N/A", testToConnect: "N/A", connectToTest: "N/A", testToDisconnect: "N/A", preventRemoval: "N/A" },
-    section9: { visual: "N/A" },
-    section10: { diagram: "", result: "N/A" },
-    section11: { counter: null },
-    comments: "",
-    signoff: { inspector: "", date: "", signature: "" },
-  };
-}
-function setAtPath(obj: any, path: string, value: any) {
-  const parts = path.split(".");
-  let cur = obj;
-  for (let i = 0; i < parts.length - 1; i++) {
-    const p = parts[i];
-    if (!(p in cur)) cur[p] = {};
-    cur = cur[p];
-  }
-  cur[parts[parts.length - 1]] = value;
-  return obj;
-}
-function toNumber(v: any): number | null {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-function mergeWithDefault(loaded: any): FormData {
-  return deepMerge(defaultFormData(), loaded);
-}
-function deepMerge(target: any, source: any) {
-  if (typeof source !== "object" || source === null) return target;
-  const output = Array.isArray(target) ? [...target] : { ...target };
-  for (const key of Object.keys(source)) {
-    if (Array.isArray(source[key])) output[key] = source[key];
-    else if (typeof source[key] === "object" && source[key] !== null) output[key] = deepMerge(target[key] ?? {}, source[key]);
-    else output[key] = source[key];
-  }
-  return output;
 }

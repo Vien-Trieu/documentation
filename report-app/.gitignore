@@ -1,22 +1,32 @@
-# dependencies
-/node_modules
-/.pnp
-.pnp.js
+# -------------------------
+# Dependencies
+# -------------------------
+node_modules/
 
-# testing
-/coverage
+# -------------------------
+# Build output
+# -------------------------
+dist/
+dist-ssr/
 
-# production
-/build
+# -------------------------
+# TypeScript
+# -------------------------
+*.tsbuildinfo
 
-# misc
-.DS_Store
+# -------------------------
+# Environment files
+# (keep .env.sample committed if you use one)
+# -------------------------
 .env
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 
+# -------------------------
 # Logs
+# -------------------------
 logs
 *.log
 npm-debug.log*
@@ -25,18 +35,25 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
+# -------------------------
+# Testing
+# -------------------------
+coverage/
 
-# Editor directories and files
+# -------------------------
+# Editor/IDE junk
+# -------------------------
 .vscode/*
 !.vscode/extensions.json
-.idea
-.DS_Store
+.idea/
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+
+# -------------------------
+# OS junk
+# -------------------------
+.DS_Store
+Thumbs.db
