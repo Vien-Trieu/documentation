@@ -1,0 +1,60 @@
+:root {
+  --bg: #f5f5f5;
+  --card: #fff;
+  --text: #111;
+  --muted: #6b7280;
+  --border: #e5e7eb;
+  --ring: rgba(0,0,0,.08);
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+  color: var(--text);
+  background: var(--bg);
+}
+
+.container { max-width: 1000px; margin: 0 auto; padding: 20px; }
+.header, .card { background: var(--card); border-radius: 14px; box-shadow: 0 2px 10px rgba(0,0,0,.05); }
+.header { padding: 20px; margin-bottom: 16px; }
+.card { padding: 20px; margin-bottom: 16px; }
+
+.h1 { margin: 0 0 4px; font-size: 24px; font-weight: 700; }
+.subtle { color: var(--muted); font-size: 13px; }
+
+.grid { display: grid; gap: 12px; }
+.grid-4 { grid-template-columns: repeat(4, minmax(0,1fr)); }
+.grid-3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
+@media (max-width: 800px) { .grid-4,.grid-3 { grid-template-columns: 1fr; } }
+
+.label { font-size: 13px; font-weight: 600; color: #374151; display:block; margin-bottom: 6px; }
+.input, .textarea, .btn {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 14px;
+}
+.input { width: 100%; padding: 9px 10px; outline: none; }
+.input:focus, .textarea:focus { box-shadow: 0 0 0 3px var(--ring); border-color: #d1d5db; }
+.textarea { width: 100%; padding: 10px; resize: vertical; }
+
+.row { display: grid; gap: 12px; grid-template-columns: repeat(3, minmax(0,1fr)); align-items: end; }
+@media (max-width: 800px) { .row { grid-template-columns: 1fr; } }
+
+.btn { padding: 8px 12px; background: #fff; cursor: pointer; }
+.btn:hover { background: #fafafa; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.pills { display: flex; gap: 14px; flex-wrap: wrap; font-size: 14px; }
+.table { width: 100%; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; border-collapse: collapse; }
+.table th, .table td { padding: 8px; text-align: left; border-top: 1px solid var(--border); }
+.table thead th { background: #fafafa; border-top: none; }
+
+.muted { color: var(--muted); font-size: 12px; }
+
+@media print {
+  body { background: white; }
+  .header, .card { box-shadow: none; border: 1px solid #ddd; border-radius: 0; }
+  .print-hide { display: none !important; }
+}
