@@ -1,0 +1,59 @@
+# -------------------------
+# Dependencies
+# -------------------------
+node_modules/
+
+# -------------------------
+# Build output
+# -------------------------
+dist/
+dist-ssr/
+
+# -------------------------
+# TypeScript
+# -------------------------
+*.tsbuildinfo
+
+# -------------------------
+# Environment files
+# (keep .env.sample committed if you use one)
+# -------------------------
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# -------------------------
+# Logs
+# -------------------------
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# -------------------------
+# Testing
+# -------------------------
+coverage/
+
+# -------------------------
+# Editor/IDE junk
+# -------------------------
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# -------------------------
+# OS junk
+# -------------------------
+.DS_Store
+Thumbs.db
