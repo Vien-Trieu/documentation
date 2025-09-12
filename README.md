@@ -2,7 +2,7 @@
 # Documentation App
 
 ## 📖 Overview
-The **Report App** is a React-based application designed to create, edit, and manage production testing forms.  
+The **Documentation App** is a React-based application designed to create, edit, and manage production testing forms.  
 It supports saving forms as PDFs and resuming work by reloading a previously saved PDF.  
 
 Key features:
