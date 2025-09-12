@@ -1,3 +1,15 @@
+/**
+ * NOTE: If your file is App.jsx instead of App.tsx:
+ * - You can paste this as-is; JSX will ignore the type annotations.
+ * - Or remove the few type annotations (PFNType, FormData, etc.).
+ */
+
+/**
+ * Author: Vien Trieu
+ * Date: 2024-08-31
+ * Description: Main App component for the LV RIR Breaker Production Testing Form.
+ */
+
 import { useMemo, useRef, useState } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker?url";
@@ -11,9 +23,10 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
  * - Device Serial # and Customer Order # required
  * - ABB branding and Document No. + Revision
  *
- * Payload embed method:
- * - Invisible zero-width characters (no visible "DATA:: ... ::END").
- * - Import supports both zero-width payloads AND the older DATA::...::END base64.
+ * Payload embed methods:
+ * 1) **Visible microtext marker (primary, robust)**
+ * 2) Zero-width characters (fallback)
+ * 3) Legacy DATA::...::END (fallback)
  */
 
 type PFNType = "PASS" | "FAIL" | "N/A";
@@ -139,36 +152,6 @@ const tripRows: { key: TripKey; label: string }[] = [
   { key: "groundDelay", label: "Ground Delay (I4 = __ In)" },
 ];
 
-function TripRow({ row, data, onChange } : { row:{key:TripKey; label:string}; data:TripRowData; onChange:(v:TripRowData)=>void }) {
-  const set = (k: keyof TripRowData, v: any) => onChange({ ...data, [k]: v });
-  return (
-    <div className="card" style={{padding:12}}>
-      <div className="grid grid-4">
-        <div className="grid" style={{gap:6}}>
-          <Label>{row.label}</Label>
-          <TextInput value={data.settings} onChange={(e:any)=>set("settings", e.target.value)} placeholder="Test Settings (e.g., I1=4.0 In, tol ±10%)"/>
-        </div>
-        <div className="grid" style={{gap:6}}>
-          <Label>Acceptance Criteria</Label>
-          <TextInput value={data.criteria} onChange={(e:any)=>set("criteria", e.target.value)} placeholder="e.g., ≤ 5 sec @ I1"/>
-        </div>
-        <div className="grid" style={{gap:6}}>
-          <Label>Phase A Result</Label>
-          <TextInput value={data.phaseA} onChange={(e:any)=>set("phaseA", e.target.value)} placeholder="e.g., 4.8 sec / 1200 A"/>
-        </div>
-        <div className="grid" style={{gap:6}}>
-          <Label>Phase B Result</Label>
-          <TextInput value={data.phaseB} onChange={(e:any)=>set("phaseB", e.target.value)} placeholder="e.g., 4.9 sec / 1190 A"/>
-        </div>
-        <div className="grid" style={{gap:6}}>
-          <Label>Phase C Result</Label>
-          <TextInput value={data.phaseC} onChange={(e:any)=>set("phaseC", e.target.value)} placeholder="e.g., 5.0 sec / 1210 A"/>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /* ----------------- data helpers ----------------- */
 function defaultTripRow(): TripRowData {
   return { settings: "", criteria: "", phaseA: "", phaseB: "", phaseC: "" };
@@ -235,23 +218,61 @@ function mergeWithDefault(loaded: any): FormData {
   return deepMerge(defaultFormData(), loaded);
 }
 
-/* ----------------- invisible (zero-width) PDF payload helpers ----------------- */
-// Zero-width chars: 0 = U+200B, 1 = U+200C, sentinel = U+200D U+200D
+/* ----------------- UTF-8 safe Base64 helpers ----------------- */
+const _te = new TextEncoder();
+const _td = new TextDecoder();
+
+function b64EncodeUTF8(str: string): string {
+  const bytes = _te.encode(str);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+function b64DecodeUTF8(b64: string): string {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return _td.decode(bytes);
+}
+
+/* ----------------- Visible marker payload (robust primary) ----------------- */
+const EMBED_START = "<<<RIRDATA::";
+const EMBED_END = "::RIRDATA>>>";
+function checksum(str: string) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
+  return h.toString(16);
+}
+function makeMarkerPayload(json: string) {
+  const b64 = b64EncodeUTF8(json);
+  const sum = checksum(b64);
+  const wrapped = b64.replace(/(.{1,120})/g, "$1 ");
+  return `${EMBED_START}${sum}|${wrapped}${EMBED_END}`;
+}
+function tryMarkerPayload(text: string): string | null {
+  const re = new RegExp(
+    `${EMBED_START.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}([0-9a-f]+)\\|([\\s\\S]*?)${EMBED_END.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}`
+  );
+  const m = text.match(re);
+  if (!m) return null;
+  const [, sum, body] = m;
+  const b64 = body.replace(/\s+/g, "");
+  if (checksum(b64) !== sum) return null;
+  try { return b64DecodeUTF8(b64); } catch { return null; }
+}
+
+/* ----------------- Zero-width payload (fallback) ----------------- */
 const ZW0 = "\u200b";        // zero width space
 const ZW1 = "\u200c";        // zero width non-joiner
 const ZWS = "\u200d\u200d";  // sentinel (double joiner)
 
-/** Encode JSON -> base64 -> bits -> zero-width string with sentinels */
 function encodeZW(jsonStr: string): string {
-  const b64 = btoa(jsonStr);
+  const b64 = b64EncodeUTF8(jsonStr);
   const bits = Array.from(b64)
-    .map(ch => ch.charCodeAt(0).toString(2).padStart(8, "0"))
-    .join("");
+    .map(ch => ch.charCodeAt(0).toString(2)).map(b => b.padStart(8,"0")).join("");
   const body = bits.replace(/0/g, ZW0).replace(/1/g, ZW1);
   return ZWS + body + ZWS;
 }
-
-/** Extract zero-width payload from arbitrary text and decode to JSON string */
 function decodeZWFromText(text: string): string | null {
   const zwOnly = text.replace(/[^\u200b\u200c\u200d]/g, "");
   const parts = zwOnly.split(ZWS).filter(Boolean);
@@ -260,22 +281,160 @@ function decodeZWFromText(text: string): string | null {
   if (bits.length % 8 !== 0) return null;
   const b64 = bits.match(/.{8}/g)!.map(byte => String.fromCharCode(parseInt(byte, 2))).join("");
   try {
-    return atob(b64);
+    return b64DecodeUTF8(b64);
   } catch {
     return null;
   }
 }
 
-/** Legacy fallback: support older PDFs that used DATA::...::END base64 text */
+/* ----------------- Legacy DATA::...::END (fallback) ----------------- */
 function tryLegacyDataBlock(text: string): string | null {
   const m = text.match(/DATA::([\s\S]*?)::END/);
   if (!m) return null;
   const base64 = m[1].replace(/[^A-Za-z0-9+/=]/g, "");
   try {
-    return atob(base64);
+    return b64DecodeUTF8(base64);
   } catch {
     return null;
   }
+}
+
+/* ----------------- Section 1 table component ----------------- */
+function Section1Table({
+  data,
+  update
+}: {
+  data: FormData["section1"];
+  update: (path: string, v: any) => void;
+}) {
+  return (
+    <div className="card">
+      <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+        <h2 className="h1" style={{fontSize:18}}>1. Dielectric Withstand Test</h2>
+        <div className="subtle">Acceptance Criteria: Withstand for 1 minute.</div>
+      </div>
+
+      <div style={{marginTop:8}}>
+        <table className="table">
+          <thead>
+            <tr>
+              <th style={{width:260}}>Measured</th>
+              <th className="center">Phase A</th>
+              <th className="center">Phase B</th>
+              <th className="center">Phase C</th>
+            </tr>
+          </thead>
+        <tbody>
+            <tr>
+              <td className="muted-cell"><strong>VAC (60Hz) @ 2200V</strong></td>
+              <td className="center">
+                <NumberInput value={data.vacA ?? ""} onChange={(e:any)=>update("section1.vacA", toNumber(e.target.value))}/>
+              </td>
+              <td className="center">
+                <NumberInput value={data.vacB ?? ""} onChange={(e:any)=>update("section1.vacB", toNumber(e.target.value))}/>
+              </td>
+              <td className="center">
+                <NumberInput value={data.vacC ?? ""} onChange={(e:any)=>update("section1.vacC", toNumber(e.target.value))}/>
+              </td>
+            </tr>
+            <tr>
+              <td className="muted-cell"><strong>Result (PASS / FAIL / N/A)</strong></td>
+              <td className="center"><PFN value={data.resultA} onChange={(v)=>update("section1.resultA", v)} name="s1a"/></td>
+              <td className="center"><PFN value={data.resultB} onChange={(v)=>update("section1.resultB", v)} name="s1b"/></td>
+              <td className="center"><PFN value={data.resultC} onChange={(v)=>update("section1.resultC", v)} name="s1c"/></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ----------------- Trip table component ----------------- */
+function TripTable({
+  section2,
+  update
+}: {
+  section2: Section2;
+  update: (path: string, v: any) => void;
+}) {
+  return (
+    <div className="card">
+      <h2 className="h1" style={{fontSize:18}}>2. Primary Current Injection Testing of Trip Devices</h2>
+
+      {/* PR1 + Notes */}
+      <div className="row" style={{margin:"8px 0"}}>
+        <div>
+          <Label>PR1</Label>
+          <TextInput value={section2.PR1} onChange={(e:any)=>update("section2.PR1", e.target.value)} />
+        </div>
+        <div style={{gridColumn:"span 2"}}>
+          <Label>Notes</Label>
+          <TextInput value={section2.notes} onChange={(e:any)=>update("section2.notes", e.target.value)} />
+        </div>
+      </div>
+
+      <div style={{overflowX:"auto"}}>
+        <table className="table">
+          <thead>
+            <tr>
+              <th style={{width:220}}>Function</th>
+              <th style={{width:240}}>Test Settings</th>
+              <th style={{width:220}}>Acceptance Criteria</th>
+              <th className="center" style={{width:110}}>A</th>
+              <th className="center" style={{width:110}}>B</th>
+              <th className="center" style={{width:110}}>C</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tripRows.map(({key, label}) => {
+              const row = section2[key];
+              return (
+                <tr key={key}>
+                  <td className="muted-cell"><strong>{label}</strong></td>
+                  <td>
+                    <TextInput
+                      value={row.settings}
+                      onChange={(e:any)=>update(`section2.${key}.settings`, e.target.value)}
+                      placeholder="e.g., I1 = 4.0 In, tol ±10%"
+                    />
+                  </td>
+                  <td>
+                    <TextInput
+                      value={row.criteria}
+                      onChange={(e:any)=>update(`section2.${key}.criteria`, e.target.value)}
+                      placeholder="e.g., ≤ 5 sec @ I1"
+                    />
+                  </td>
+                  <td className="center">
+                    <TextInput
+                      value={row.phaseA}
+                      onChange={(e:any)=>update(`section2.${key}.phaseA`, e.target.value)}
+                      placeholder="value / sec"
+                    />
+                  </td>
+                  <td className="center">
+                    <TextInput
+                      value={row.phaseB}
+                      onChange={(e:any)=>update(`section2.${key}.phaseB`, e.target.value)}
+                      placeholder="value / sec"
+                    />
+                  </td>
+                  <td className="center">
+                    <TextInput
+                      value={row.phaseC}
+                      onChange={(e:any)=>update(`section2.${key}.phaseC`, e.target.value)}
+                      placeholder="value / sec"
+                    />
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }
 
 export default function App() {
@@ -305,7 +464,7 @@ export default function App() {
     return Object.keys(newErr).length === 0;
   };
 
-  // Save as PDF (browser print). Remind to disable headers/footers to hide page URL/footer.
+  // Save as PDF (browser print)
   const saveAsPdf = () => {
     if (!validateRequired()) {
       alert("Please complete required fields (*) before saving as PDF.");
@@ -332,10 +491,13 @@ export default function App() {
         text += "\n";
       }
 
-      // First try invisible zero-width payload
-      let jsonStr = decodeZWFromText(text);
+      // 1) Robust marker payload (visible microtext)
+      let jsonStr = tryMarkerPayload(text);
 
-      // Fallback to legacy DATA::...::END if needed
+      // 2) Zero-width fallback
+      if (!jsonStr) jsonStr = decodeZWFromText(text);
+
+      // 3) Legacy DATA::...::END fallback
       if (!jsonStr) jsonStr = tryLegacyDataBlock(text);
 
       if (!jsonStr) {
@@ -359,41 +521,58 @@ export default function App() {
     setErrors({});
   };
 
-  // Encoded invisible payload for print-only embedding
+  // Encoded payloads for print embedding
   const invisiblePayload = useMemo(() => encodeZW(JSON.stringify(data)), [data]);
+  const visibleMarkerPayload = useMemo(() => makeMarkerPayload(JSON.stringify(data)), [data]);
 
-  // Apparatus dropdown options (customize as needed)
   const apparatusOptions = ["Emax2", "EGG", "Eaton", "Siemens", "GE"];
 
   return (
     <div className="container">
-      {/* Inline helpers for print-only and error styles (works even if CSS file isn't updated) */}
+      {/* Inline helpers for print-only and error styles. 
+          I will merge these into your CSS file when you send it. */}
       <style>{`
         .input-error { border-color: #ef4444 !important; box-shadow: 0 0 0 3px rgba(239,68,68,.12); }
         .req::after { content:" *"; color:#ef4444; }
         .print-only { display: none; }
+        .print-hide { }
         @media print {
-          @page { margin: 12mm; } /* keeps content inside printable area */
+          @page { margin: 12mm; }
           .print-hide { display: none !important; }
           .print-only { display: block; }
+          /* Robust embedded marker line */
+          #rir-print-embed {
+            display: block;
+            position: fixed;
+            left: 0.5in;
+            right: 0.5in;
+            bottom: 0.35in;
+            font-family: ui-monospace, Menlo, Consolas, "Courier New", monospace;
+            font-size: 5px;
+            line-height: 1.1;
+            color: #222;
+            opacity: 0.15;
+            white-space: pre-wrap;
+            word-break: break-all;
+            pointer-events: none;
+            user-select: none;
+          }
         }
+        /* table styles */
+        .table { width: 100%; border-collapse: collapse; }
+        .table th, .table td { border: 1px solid #d1d5db; padding: 6px 8px; vertical-align: middle; }
+        .table thead th { background: #f3f4f6; text-align: left; }
+        .table .muted-cell { background: #eef2f7; }
+        .table .center { text-align: center; }
       `}</style>
 
       {/* Header with ABB branding and document block */}
       <div className="header">
         <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", gap:12}}>
-          {/* ABB brand */}
           <div style={{display:"flex", alignItems:"center", gap:10}}>
-            <div
-              aria-label="ABB"
-              style={{ fontWeight: 900, fontSize: 26, color: "#e10600", letterSpacing: 1 }}
-            >
-              ABB
-            </div>
+            <div aria-label="ABB" style={{ fontWeight: 900, fontSize: 26, color: "#e10600", letterSpacing: 1 }}>ABB</div>
             <div className="subtle">Low Voltage RIR Breaker – Production Testing</div>
           </div>
-
-          {/* Document info */}
           <div style={{textAlign:"right", fontSize:13}}>
             <div><strong>Document No.:</strong> F-INSP-61-01</div>
             <div><strong>Revision:</strong> D</div>
@@ -401,11 +580,9 @@ export default function App() {
           </div>
         </div>
 
-        {/* Main title */}
         <h1 className="h1" style={{marginTop:10}}>Production Testing Form</h1>
         <div className="subtle">LV RIR Breaker using an E-MAX Circuit Breaker</div>
 
-        {/* Header fields */}
         <div className="grid grid-4" style={{marginTop:10}}>
           <div>
             <Label className="req">Apparatus Type</Label>
@@ -413,7 +590,7 @@ export default function App() {
               id="apparatusType"
               value={data.header.apparatusType}
               onChange={(e:any)=>update("header.apparatusType", e.target.value)}
-              options={apparatusOptions}
+              options={["Emax2","EGG","Eaton","Siemens","GE"]}
               required
               hasError={!!errors["header.apparatusType"]}
             />
@@ -466,41 +643,8 @@ export default function App() {
         </div>
       </div>
 
-      {/* 1 */}
-      <div className="card">
-        <div style={{display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:8, marginBottom:10}}>
-          <h2 className="h1" style={{fontSize:18}}>1. AC Hi-Pot Testing of each pole/each phase (2200V at 60Hz) – 60 seconds</h2>
-          <span className="subtle">Dielectric Withstand Test @ Acceptance: Withstand for 1 minute.</span>
-        </div>
-        <div className="row">
-          <div>
-            <Label>Measured (VAC) – Phase A</Label>
-            <NumberInput value={data.section1.vacA ?? ""} onChange={(e:any)=>update("section1.vacA", toNumber(e.target.value))}/>
-          </div>
-          <div>
-            <Label>Measured (VAC) – Phase B</Label>
-            <NumberInput value={data.section1.vacB ?? ""} onChange={(e:any)=>update("section1.vacB", toNumber(e.target.value))}/>
-          </div>
-          <div>
-            <Label>Measured (VAC) – Phase C</Label>
-            <NumberInput value={data.section1.vacC ?? ""} onChange={(e:any)=>update("section1.vacC", toNumber(e.target.value))}/>
-          </div>
-        </div>
-        <div className="row">
-          <div>
-            <Label>Phase A Result</Label>
-            <PFN value={data.section1.resultA} onChange={(v)=>update("section1.resultA", v)} name="s1a"/>
-          </div>
-          <div>
-            <Label>Phase B Result</Label>
-            <PFN value={data.section1.resultB} onChange={(v)=>update("section1.resultB", v)} name="s1b"/>
-          </div>
-          <div>
-            <Label>Phase C Result</Label>
-            <PFN value={data.section1.resultC} onChange={(v)=>update("section1.resultC", v)} name="s1c"/>
-          </div>
-        </div>
-      </div>
+      {/* 1 — Dielectric table */}
+      <Section1Table data={data.section1} update={update} />
 
       {/* 1.1 / 1.2 */}
       <div className="card">
@@ -512,25 +656,8 @@ export default function App() {
         <PFN value={data.section1_2} onChange={(v)=>update("section1_2", v)} name="s12"/>
       </div>
 
-      {/* 2 */}
-      <div className="card">
-        <h2 className="h1" style={{fontSize:18}}>2. Primary Current Injection Testing of Trip Devices</h2>
-        <div className="grid" style={{gap:12}}>
-          <div className="row">
-            <div>
-              <Label>PR1</Label>
-              <TextInput value={data.section2.PR1} onChange={(e:any)=>update("section2.PR1", e.target.value)}/>
-            </div>
-            <div style={{gridColumn:"span 2"}}>
-              <Label>Notes</Label>
-              <TextInput value={data.section2.notes} onChange={(e:any)=>update("section2.notes", e.target.value)}/>
-            </div>
-          </div>
-          {tripRows.map(r => (
-            <TripRow key={r.key} row={r} data={data.section2[r.key]} onChange={(v)=>update(`section2.${r.key}`, v)} />
-          ))}
-        </div>
-      </div>
+      {/* 2 — Trip devices table */}
+      <TripTable section2={data.section2} update={update} />
 
       {/* 3 */}
       <div className="card">
@@ -624,9 +751,21 @@ export default function App() {
             </tbody>
           </table>
         </div>
+        {/* hide these on print */}
         <div style={{display:"flex", gap:8, marginTop:8}}>
-          <button className="btn" onClick={()=>update("section7.rows", [...data.section7.rows, { label:"", a:null, b:null, c:null }])}>Add Row</button>
-          <button className="btn" onClick={()=>update("section7.rows", data.section7.rows.slice(0,-1))} disabled={data.section7.rows.length===0}>Remove Row</button>
+          <button
+            className="btn print-hide"
+            onClick={()=>update("section7.rows", [...data.section7.rows, { label:"", a:null, b:null, c:null }])}
+          >
+            Add Row
+          </button>
+          <button
+            className="btn print-hide"
+            onClick={()=>update("section7.rows", data.section7.rows.slice(0,-1))}
+            disabled={data.section7.rows.length===0}
+          >
+            Remove Row
+          </button>
         </div>
         <div className="muted" style={{marginTop:8}}>
           <div><strong>Acceptance Criteria (±10% Phase-to-Phase):</strong></div>
@@ -713,9 +852,10 @@ export default function App() {
         <p className="muted" style={{marginTop:8}}>Procedure Number and Revision: F-INSP-61-01, REV D (05/21/2025)</p>
       </div>
 
-      {/* Invisible, print-only zero-width payload at end of document */}
+      {/* Print payloads: zero-width (fallback) + tiny visible marker line */}
       <div className="print-only">
         <span>{invisiblePayload}</span>
+        <div id="rir-print-embed">{visibleMarkerPayload}</div>
       </div>
     </div>
   );
