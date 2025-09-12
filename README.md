@@ -59,7 +59,7 @@ cd documentation/report-app
 	├── package.json     # Project dependencies
 	└── README.md        # Project documentation
 
-## ## ⚙️ Technologies Used
+## ⚙️ Technologies Used
 
 - **React** (Vite for fast development)
     
