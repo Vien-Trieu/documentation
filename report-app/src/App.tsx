@@ -1,10 +1,4 @@
 /**
- * NOTE: If your file is App.jsx instead of App.tsx:
- * - You can paste this as-is; JSX will ignore the type annotations.
- * - Or remove the few type annotations (PFNType, FormData, etc.).
- */
-
-/**
  * Author: Vien Trieu
  * Date: 2024-08-31
  * Description: Main App component for the LV RIR Breaker Production Testing Form.
