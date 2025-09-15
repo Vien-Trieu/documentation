@@ -2,11 +2,21 @@
  * Author: Vien Trieu
  * Date: 2024-08-31
  * Description: Main App component for the LV RIR Breaker Production Testing Form.
+ *
+ * High-level overview:
+ * - Strongly-typed form model (FormData) for safety and clarity.
+ * - Modular UI primitives (Label, TextInput, PFN, etc.).
+ * - "Print to PDF" flow with embedded data payloads (visible + invisible) so the
+ *   PDF itself can be used to restore the form later.
+ * - "Resume from PDF" parses those payloads using pdfjs to recover state.
+ * - Required field validation before printing.
+ * - Revision letter auto-updates the revision date to user's local "today".
  */
 
 import { useMemo, useRef, useState } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker?url";
+// Wire up the PDF.js worker so getDocument() works in browsers.
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 /**
@@ -17,14 +27,18 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
  * - Device Serial # and Customer Order # required
  * - ABB branding and Document No. + Revision
  *
- * Payload embed methods:
- * 1) **Visible microtext marker (primary, robust)**
- * 2) Zero-width characters (fallback)
- * 3) Legacy DATA::...::END (fallback)
+ * Payload embed methods (order of preference):
+ * 1) Visible microtext marker (primary, robust): a tiny, low-opacity string at the bottom of the page.
+ * 2) Zero-width characters (fallback): invisible data hidden in text flow.
+ * 3) Legacy DATA::...::END (fallback): for backward compatibility.
  */
 
+// --- Domain enums/types ---
+
+// PASS/FAIL/N/A radio selection type.
 type PFNType = "PASS" | "FAIL" | "N/A";
 
+// A single row in the trip table (test settings, acceptance criteria, and phase readings).
 type TripRowData = {
   settings: string;
   criteria: string;
@@ -33,6 +47,7 @@ type TripRowData = {
   phaseC: string;
 };
 
+// Section 2 data shape (PR1, notes, and several TripRowData sections).
 type Section2 = {
   PR1: string;
   notes: string;
@@ -47,12 +62,15 @@ type Section2 = {
 };
 type TripKey = Exclude<keyof Section2, "PR1" | "notes">;
 
+// Form root model. Keep this up to date with UI to stay type-safe.
 type FormData = {
   header: {
     apparatusType: string;
     deviceSerial: string;
     customerOrder: string;
     customerPO: string;
+    revision?: string; // Optional to allow merging with older PDFs that might not have it.
+    revDate?: string;  // Auto-stamped when revision changes and on load.
   };
   section1: {
     vacA: number | null;
@@ -93,10 +111,15 @@ type FormData = {
   signoff: { inspector: string; date: string; signature: string };
 };
 
-// ---------- UI bits ----------
+// ---------- UI primitives ----------
+// Kept simple (no external UI libs). Each supports minimal a11y props.
+
+// Label wrapper so we can style labels consistently.
 const Label = ({ children, htmlFor, className }: any) => (
   <label className={`label ${className ?? ""}`} htmlFor={htmlFor}>{children}</label>
 );
+
+// Generic text input with error styling and required flag.
 const TextInput = ({ id, value, onChange, placeholder, type="text", required=false, hasError=false }: any) => (
   <input
     id={id}
@@ -108,10 +131,16 @@ const TextInput = ({ id, value, onChange, placeholder, type="text", required=fal
     aria-required={required}
   />
 );
+
+// NumberInput reuses TextInput but forces type="number".
 const NumberInput = (p: any) => <TextInput {...p} type="number" />;
+
+// Multi-line text input (textarea).
 const TextArea = ({ id, value, onChange, rows=4, placeholder }: any) => (
   <textarea id={id} value={value} onChange={onChange} rows={rows} placeholder={placeholder} className="textarea"/>
 );
+
+// Select element with a disabled placeholder and error styling.
 const SelectInput = ({ id, value, onChange, options, required=false, hasError=false }: any) => (
   <select
     id={id}
@@ -124,6 +153,8 @@ const SelectInput = ({ id, value, onChange, options, required=false, hasError=fa
     {options.map((o: string) => <option key={o} value={o}>{o}</option>)}
   </select>
 );
+
+// PASS/FAIL/N/A pill radio group. `name` keeps different groups independent.
 const PFN = ({ value, onChange, name }: { value: PFNType; onChange:(v:PFNType)=>void; name:string }) => (
   <div className="pills">
     {(["PASS","FAIL","N/A"] as PFNType[]).map(opt => (
@@ -135,6 +166,7 @@ const PFN = ({ value, onChange, name }: { value: PFNType; onChange:(v:PFNType)=>
   </div>
 );
 
+// Labels for the trip table rows with keys mapping to Section2.
 const tripRows: { key: TripKey; label: string }[] = [
   { key: "longTimePickup", label: "Long-time Pickup (I1 = __ In)" },
   { key: "longTimeDelay", label: "Long-time Delay (I1 = __ In)" },
@@ -147,12 +179,30 @@ const tripRows: { key: TripKey; label: string }[] = [
 ];
 
 /* ----------------- data helpers ----------------- */
+
+// Fresh empty row for Section 2 tables.
 function defaultTripRow(): TripRowData {
   return { settings: "", criteria: "", phaseA: "", phaseB: "", phaseC: "" };
 }
+
+// Local date (YYYY-MM-DD) to display for human-facing dates (rev date).
+function todayLocal(): string {
+  const d = new Date(); // user's local timezone
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`; // YYYY-MM-DD
+}
+
+// ISO date (UTC slice) used for initial default revDate; local is preferable for display.
+function today(): string{
+  return new Date().toISOString().slice(0,10);
+}
+
+// Default entire form data. Keep this in sync with types & UI.
 function defaultFormData(): FormData {
   return {
-    header: { apparatusType: "", deviceSerial: "", customerOrder: "", customerPO: "" },
+    header: { apparatusType: "", deviceSerial: "", customerOrder: "", customerPO: "", revision: "D", revDate: today() },
     section1: { vacA: null, vacB: null, vacC: null, resultA: "N/A", resultB: "N/A", resultC: "N/A" },
     section1_1: "N/A",
     section1_2: "N/A",
@@ -183,6 +233,8 @@ function defaultFormData(): FormData {
     signoff: { inspector: "", date: "", signature: "" },
   };
 }
+
+// Mutates a clone by walking a dotted path (e.g., "section2.longTimePickup.phaseA").
 function setAtPath(obj: any, path: string, value: any) {
   const parts = path.split(".");
   let cur = obj;
@@ -194,10 +246,14 @@ function setAtPath(obj: any, path: string, value: any) {
   cur[parts[parts.length - 1]] = value;
   return obj;
 }
+
+// Converts input value to number or null (empty/invalid -> null). Keeps NaN out of state.
 function toNumber(v: any): number | null {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
+
+// Deep merge for plain objects/arrays (arrays replaced, not merged).
 function deepMerge(target: any, source: any) {
   if (typeof source !== "object" || source === null) return target;
   const output = Array.isArray(target) ? [...target] : { ...target };
@@ -208,11 +264,14 @@ function deepMerge(target: any, source: any) {
   }
   return output;
 }
+
+// Merge loaded (possibly partial/old) data with the latest defaults.
 function mergeWithDefault(loaded: any): FormData {
   return deepMerge(defaultFormData(), loaded);
 }
 
 /* ----------------- UTF-8 safe Base64 helpers ----------------- */
+// Using TextEncoder/TextDecoder to ensure correct UTF-8 roundtrips for payloads.
 const _te = new TextEncoder();
 const _td = new TextDecoder();
 
@@ -230,19 +289,26 @@ function b64DecodeUTF8(b64: string): string {
 }
 
 /* ----------------- Visible marker payload (robust primary) ----------------- */
+// This is the preferred embedding: human-visible microtext that's unlikely to be stripped by PDF generators.
 const EMBED_START = "<<<RIRDATA::";
 const EMBED_END = "::RIRDATA>>>";
+
+// Simple rolling checksum (non-crypto) to catch corruption/partial copies.
 function checksum(str: string) {
   let h = 0;
   for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
   return h.toString(16);
 }
+
+// Wraps base64 data with checksum and delimiters, with spaces every ~120 chars for readability.
 function makeMarkerPayload(json: string) {
   const b64 = b64EncodeUTF8(json);
   const sum = checksum(b64);
   const wrapped = b64.replace(/(.{1,120})/g, "$1 ");
   return `${EMBED_START}${sum}|${wrapped}${EMBED_END}`;
 }
+
+// Attempts to find and validate the visible marker in text content.
 function tryMarkerPayload(text: string): string | null {
   const re = new RegExp(
     `${EMBED_START.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}([0-9a-f]+)\\|([\\s\\S]*?)${EMBED_END.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}`
@@ -256,10 +322,13 @@ function tryMarkerPayload(text: string): string | null {
 }
 
 /* ----------------- Zero-width payload (fallback) ----------------- */
+// Encodes the payload as an invisible sequence of zero-width characters surrounded by a sentinel.
+// Some PDF workflows may strip or reflow these—thus it's a fallback.
 const ZW0 = "\u200b";        // zero width space
 const ZW1 = "\u200c";        // zero width non-joiner
 const ZWS = "\u200d\u200d";  // sentinel (double joiner)
 
+// Encode JSON into zero-width bitstring (base64 -> bits -> ZW chars).
 function encodeZW(jsonStr: string): string {
   const b64 = b64EncodeUTF8(jsonStr);
   const bits = Array.from(b64)
@@ -267,6 +336,8 @@ function encodeZW(jsonStr: string): string {
   const body = bits.replace(/0/g, ZW0).replace(/1/g, ZW1);
   return ZWS + body + ZWS;
 }
+
+// Extracts the first sentinel-wrapped zero-width bitstring and decodes to JSON string.
 function decodeZWFromText(text: string): string | null {
   const zwOnly = text.replace(/[^\u200b\u200c\u200d]/g, "");
   const parts = zwOnly.split(ZWS).filter(Boolean);
@@ -281,7 +352,12 @@ function decodeZWFromText(text: string): string | null {
   }
 }
 
+/* ----------------- A-Z Options ----------------- */
+// Used for Revision dropdown (A..Z).
+const REV_LETTERS = Array.from({length:26},(_,i)=>String.fromCharCode(65+i));
+
 /* ----------------- Legacy DATA::...::END (fallback) ----------------- */
+// Maintained for compatibility with older PDFs. Consider removing when all PDFs are upgraded.
 function tryLegacyDataBlock(text: string): string | null {
   const m = text.match(/DATA::([\s\S]*?)::END/);
   if (!m) return null;
@@ -294,6 +370,7 @@ function tryLegacyDataBlock(text: string): string | null {
 }
 
 /* ----------------- Section 1 table component ----------------- */
+// Isolated so the table logic/markup stays focused and reusable.
 function Section1Table({
   data,
   update
@@ -345,6 +422,7 @@ function Section1Table({
 }
 
 /* ----------------- Trip table component ----------------- */
+// Drives Section 2 rows using the `tripRows` metadata above for concise code.
 function TripTable({
   section2,
   update
@@ -432,66 +510,89 @@ function TripTable({
 }
 
 export default function App() {
+  // Memoize defaults to avoid re-allocating on each render.
   const empty = useMemo(() => defaultFormData(), []);
+  // Main form state.
   const [data, setData] = useState<FormData>(empty);
+  // Track field-level errors for simple required validation feedback.
   const [errors, setErrors] = useState<{[k:string]: boolean}>({});
+  // Refs to aid focusing the first invalid field on validation failure.
   const pdfRef = useRef<HTMLInputElement>(null);
   const serialRef = useRef<HTMLInputElement>(null);
   const orderRef = useRef<HTMLInputElement>(null);
 
+  // Generic update handler. Accepts a dotted path and new value.
   const update = (path: string, value: any) => {
-    setData((d) => setAtPath(structuredClone(d), path, value));
-    if (path === "header.deviceSerial" || path === "header.customerOrder" || path === "header.apparatusType") {
+    setData(d => {
+      // structuredClone for immutable update; avoid mutating original.
+      const clone = structuredClone(d);
+      setAtPath(clone, path, value);
+
+      // If revision letter changes, re-stamp revDate to user's local today.
+      // This enforces your "always autoupdated" requirement.
+      if(path === "header.revision"){
+        clone.header.revDate = todayLocal();
+      }
+      return clone;
+    });
+
+    // Clear errors on interaction for 3 required header fields.
+    if (path === 'header.deviceSerial' || path === 'header.customerOrder' || path === 'header.apparatusType'){
       setErrors((e) => ({ ...e, [path]: false }));
     }
   };
 
-  // Validate required fields before printing
+  // Validate required fields before printing to ensure data completeness.
   const validateRequired = () => {
     const newErr: {[k:string]: boolean} = {};
     if (!data.header.apparatusType) newErr["header.apparatusType"] = true;
     if (!data.header.deviceSerial.trim()) newErr["header.deviceSerial"] = true;
     if (!data.header.customerOrder.trim()) newErr["header.customerOrder"] = true;
     setErrors(newErr);
+    // Focus the first failing field for faster correction.
     if (newErr["header.deviceSerial"] && serialRef.current) serialRef.current.focus();
     else if (newErr["header.customerOrder"] && orderRef.current) orderRef.current.focus();
     return Object.keys(newErr).length === 0;
   };
 
-  // Save as PDF (browser print)
+  // Initiates the browser's print dialog. The embedded payloads are in the DOM and get captured by PDF.
   const saveAsPdf = () => {
     if (!validateRequired()) {
       alert("Please complete required fields (*) before saving as PDF.");
       return;
     }
+    // Tip improves the final PDF output.
     alert("Tip: In the print dialog, uncheck 'Headers and footers' so the URL/footer doesn't appear in the PDF.");
     window.print();
   };
 
-  // Resume from a PDF saved by this app
+  // Restores form state by parsing text content from a PDF saved by this app.
   const handlePdfImport = async (file?: File) => {
     const f = file || pdfRef.current?.files?.[0];
     if (!f) return;
 
     try {
+      // Read PDF into memory for pdfjs.
       const arrayBuf = await f.arrayBuffer();
       const pdf = await pdfjsLib.getDocument({ data: arrayBuf }).promise;
 
+      // Collect text from all pages (order matters for marker detection).
       let text = "";
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const content = await page.getTextContent();
+        // pdfjs returns mixed content; we extract text.
         text += content.items.map((it: any) => ("str" in it ? it.str : (it as any).toString())).join(" ");
         text += "\n";
       }
 
-      // 1) Robust marker payload (visible microtext)
+      // 1) Preferred: Visible marker payload
       let jsonStr = tryMarkerPayload(text);
 
-      // 2) Zero-width fallback
+      // 2) Fallback: Zero-width payload
       if (!jsonStr) jsonStr = decodeZWFromText(text);
 
-      // 3) Legacy DATA::...::END fallback
+      // 3) Fallback: Legacy block
       if (!jsonStr) jsonStr = tryLegacyDataBlock(text);
 
       if (!jsonStr) {
@@ -499,32 +600,39 @@ export default function App() {
         return;
       }
 
+      // Parse and merge with current defaults to tolerate schema drift.
       const loaded = JSON.parse(jsonStr);
-      setData(mergeWithDefault(loaded));
+      const merged = mergeWithDefault(loaded);
+      // Always auto-update revDate to current local date on load (per your requirement).
+      merged.header.revDate = todayLocal();
+      setData(merged);
       alert("Form data restored from PDF.");
     } catch (err) {
       console.error(err);
       alert("Could not read data from PDF.");
     } finally {
+      // Reset file input so the same file can be selected again if needed.
       if (pdfRef.current) pdfRef.current.value = "";
     }
   };
 
+  // Reset form to pristine defaults.
   const reset = () => {
     setData(empty);
     setErrors({});
   };
 
-  // Encoded payloads for print embedding
+  // Prepare encoded payloads on state change. useMemo avoids recomputing unnecessarily.
   const invisiblePayload = useMemo(() => encodeZW(JSON.stringify(data)), [data]);
   const visibleMarkerPayload = useMemo(() => makeMarkerPayload(JSON.stringify(data)), [data]);
 
-  const apparatusOptions = ["Emax2", "EGG", "Eaton", "Siemens", "GE"];
+  // Apparatus types allowed (no free typing).
+  const apparatusOptions = ["Emax2", "EGG"];
 
   return (
     <div className="container">
-      {/* Inline helpers for print-only and error styles. 
-          I will merge these into your CSS file when you send it. */}
+      {/* Inline helpers for print-only and error styles.
+          If you prefer, move these to your CSS file for separation of concerns. */}
       <style>{`
         .input-error { border-color: #ef4444 !important; box-shadow: 0 0 0 3px rgba(239,68,68,.12); }
         .req::after { content:" *"; color:#ef4444; }
@@ -534,7 +642,8 @@ export default function App() {
           @page { margin: 12mm; }
           .print-hide { display: none !important; }
           .print-only { display: block; }
-          /* Robust embedded marker line */
+          /* Robust embedded marker line (low opacity microtext).
+             Placed at fixed bottom so it's likely preserved in exported PDFs. */
           #rir-print-embed {
             display: block;
             position: fixed;
@@ -552,7 +661,7 @@ export default function App() {
             user-select: none;
           }
         }
-        /* table styles */
+        /* Minimal table styles for consistency across sections. */
         .table { width: 100%; border-collapse: collapse; }
         .table th, .table td { border: 1px solid #d1d5db; padding: 6px 8px; vertical-align: middle; }
         .table thead th { background: #f3f4f6; text-align: left; }
@@ -560,23 +669,35 @@ export default function App() {
         .table .center { text-align: center; }
       `}</style>
 
-      {/* Header with ABB branding and document block */}
+      {/* Header with ABB branding, doc number, and revision block */}
       <div className="header">
         <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", gap:12}}>
           <div style={{display:"flex", alignItems:"center", gap:10}}>
+            {/* Using text instead of an image for ABB wordmark keeps things simple for printing. */}
             <div aria-label="ABB" style={{ fontWeight: 900, fontSize: 26, color: "#e10600", letterSpacing: 1 }}>ABB</div>
             <div className="subtle">Low Voltage RIR Breaker – Production Testing</div>
           </div>
           <div style={{textAlign:"right", fontSize:13}}>
             <div><strong>Document No.:</strong> F-INSP-61-01</div>
-            <div><strong>Revision:</strong> D</div>
-            <div><strong>Rev Date:</strong> 2025-05-21</div>
+            <div style={{display:"flex", gap:6, alignItems:"center", justifyContent:"flex-end"}}>
+              <strong>Revision:</strong>
+              {/* A–Z controlled dropdown. Changing this re-stamps Rev Date via update(). */}
+              <SelectInput
+                id="revision"
+                value={data.header.revision}
+                onChange={(e:any)=>update("header.revision", e.target.value)}
+                options={REV_LETTERS}
+              />
+            </div>
+            {/* Rev Date is derived. Direct editing is not exposed by design. */}
+            <div><strong>Rev Date:</strong> {data.header.revDate}</div>
           </div>
         </div>
 
-        <h1 className="h1" style={{marginTop:10}}>Production Testing Form</h1>
+        <h1 className="h1" style={{marginTop:10}}>Testing Report</h1>
         <div className="subtle">LV RIR Breaker using an E-MAX Circuit Breaker</div>
 
+        {/* Top required fields. We show inline error styling and focus invalid fields on print. */}
         <div className="grid grid-4" style={{marginTop:10}}>
           <div>
             <Label className="req">Apparatus Type</Label>
@@ -584,7 +705,7 @@ export default function App() {
               id="apparatusType"
               value={data.header.apparatusType}
               onChange={(e:any)=>update("header.apparatusType", e.target.value)}
-              options={["Emax2","EGG","Eaton","Siemens","GE"]}
+              options={["Emax2","EGG"]}
               required
               hasError={!!errors["header.apparatusType"]}
             />
@@ -621,8 +742,10 @@ export default function App() {
           </div>
         </div>
 
-        <div style={{display:"flex", gap:8, marginTop:12}} className="print-hide">
+        {/* Primary actions. Hidden when printing. */}
+        <div className="print-hide" style={{display:"flex", gap:8, marginTop:12}}>
           <button className="btn" onClick={saveAsPdf}>Save as PDF</button>
+          {/* File input is hidden behind a label for nicer button UX. */}
           <label className="btn" style={{cursor:"pointer"}}>
             Resume from PDF
             <input
@@ -640,7 +763,7 @@ export default function App() {
       {/* 1 — Dielectric table */}
       <Section1Table data={data.section1} update={update} />
 
-      {/* 1.1 / 1.2 */}
+      {/* 1.1 / 1.2 subsections (simple PFN toggles) */}
       <div className="card">
         <h2 className="h1" style={{fontSize:18}}>1.1 AC Hi-Pot Testing of Secondary control wiring – 1500 VAC for 1 minute</h2>
         <PFN value={data.section1_1} onChange={(v)=>update("section1_1", v)} name="s11"/>
@@ -653,7 +776,7 @@ export default function App() {
       {/* 2 — Trip devices table */}
       <TripTable section2={data.section2} update={update} />
 
-      {/* 3 */}
+      {/* 3 — Fusible Breakers */}
       <div className="card">
         <h2 className="h1" style={{fontSize:18}}>3. Fusible Breakers</h2>
         <div className="row">
@@ -664,7 +787,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* 4 */}
+      {/* 4 — Manually Operated */}
       <div className="card">
         <h2 className="h1" style={{fontSize:18}}>4. Manually Operated (MO) Breakers</h2>
         <div className="row">
@@ -681,7 +804,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* 5 */}
+      {/* 5 — Electrically Operated */}
       <div className="card">
         <h2 className="h1" style={{fontSize:18}}>5. Electrically Operated (EO) Breakers</h2>
         {([
@@ -703,7 +826,7 @@ export default function App() {
         ))}
       </div>
 
-      {/* 6 */}
+      {/* 6 — Undervoltage Device */}
       <div className="card">
         <h2 className="h1" style={{fontSize:18}}>6. Undervoltage Device (If equipped)</h2>
         {([
@@ -720,7 +843,7 @@ export default function App() {
         ))}
       </div>
 
-      {/* 7 */}
+      {/* 7 — Contact Resistance Test */}
       <div className="card">
         <h2 className="h1" style={{fontSize:18}}>7. Contact Resistance Test</h2>
         <div style={{overflowX:"auto"}}>
@@ -746,6 +869,7 @@ export default function App() {
           </table>
         </div>
         {/* hide these on print */}
+        {/* Add/Remove row controls are hidden in print via .print-hide to keep PDFs clean. */}
         <div style={{display:"flex", gap:8, marginTop:8}}>
           <button
             className="btn print-hide"
@@ -772,7 +896,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* 8 */}
+      {/* 8 — Racking Operations */}
       <div className="card">
         <h2 className="h1" style={{fontSize:18}}>8. Racking Operations – Position Stop Verification</h2>
         {([
@@ -791,7 +915,7 @@ export default function App() {
         ))}
       </div>
 
-      {/* 9–11 */}
+      {/* 9–11 — Visual, Wiring Diagram, Counter */}
       <div className="card">
         <h2 className="h1" style={{fontSize:18}}>9. Visual inspection of rating interference/interlock</h2>
         <PFN value={data.section9.visual} onChange={(v)=>update("section9.visual", v)} name="s9"/>
@@ -836,6 +960,7 @@ export default function App() {
           </div>
           <div>
             <Label>Date</Label>
+            {/* Freeform date to allow manual override if needed; default revDate is auto-managed above. */}
             <TextInput value={data.signoff.date} onChange={(e:any)=>update("signoff.date", e.target.value)} placeholder="YYYY-MM-DD" />
           </div>
           <div>
@@ -843,12 +968,17 @@ export default function App() {
             <TextInput value={data.signoff.signature} onChange={(e:any)=>update("signoff.signature", e.target.value)} />
           </div>
         </div>
-        <p className="muted" style={{marginTop:8}}>Procedure Number and Revision: F-INSP-61-01, REV D (05/21/2025)</p>
+        <p className="muted" style={{marginTop:8}}>
+          Procedure Number and Revision: F-INSP-61-01, REV {data.header.revision} ({data.header.revDate})
+        </p>
       </div>
 
-      {/* Print payloads: zero-width (fallback) + tiny visible marker line */}
+      {/* Print payloads: zero-width (fallback) + tiny visible marker line.
+          Both are included so that different PDF workflows still carry data. */}
       <div className="print-only">
+        {/* Zero-width payload: invisible but present in text layer. */}
         <span>{invisiblePayload}</span>
+        {/* Visible microtext payload (primary, robust). */}
         <div id="rir-print-embed">{visibleMarkerPayload}</div>
       </div>
     </div>
