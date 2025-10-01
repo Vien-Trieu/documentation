@@ -2,7 +2,7 @@
  * Author: Vien Trieu
  * Date: 2024-08-31
  * Description: Main App component for the LV RIR Breaker Production Testing Form.
- * Date modified: 2025-09-17
+ * Date modified: 2025-10-01
  */
 
 import { useMemo, useRef, useState } from "react";
@@ -13,6 +13,8 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 /* ---------------- Types ---------------- */
 
 type PFNType = "PASS" | "FAIL" | "N/A";
+type YesNoNAType = "YES" | "NO" | "N/A";
+type FanPowerType = "AC" | "DC" | "";
 
 type TripRowData = {
   settings: string;
@@ -67,6 +69,12 @@ type FormData = {
     eo5CloseMax: PFNType;
     eo5OpenMax: PFNType;
     eo2AntiPump: PFNType;
+    /* NEW FIELDS */
+    eo2ndCloseMin: PFNType;      // 5.9
+    eo2ndCloseMax: PFNType;      // 5.10
+    fanApplyProgram: YesNoNAType; // 5.11 (a)
+    fanType: FanPowerType;        // 5.11 (b)
+    fanRun60s: PFNType;           // 5.11 (c)
   };
   section6: { maxPickup: PFNType; maxDropout: PFNType; timeDelay: PFNType };
   section7: { rows: { label: string; a: number | null; b: number | null; c: number | null }[] };
@@ -141,6 +149,45 @@ const PFN = ({ value, onChange, name }: { value: PFNType; onChange: (v: PFNType)
   </div>
 );
 
+/* NEW small helpers */
+const YesNoNAGroup = ({
+  value,
+  onChange,
+  name,
+}: {
+  value: YesNoNAType;
+  onChange: (v: YesNoNAType) => void;
+  name: string;
+}) => (
+  <div className="pills">
+    {(["YES", "NO", "N/A"] as YesNoNAType[]).map((opt) => (
+      <label key={opt} style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+        <input type="radio" name={name} value={opt} checked={value === opt} onChange={(e) => onChange(e.target.value as YesNoNAType)} />
+        <span>{opt}</span>
+      </label>
+    ))}
+  </div>
+);
+
+const FanTypeGroup = ({
+  value,
+  onChange,
+  name,
+}: {
+  value: FanPowerType;
+  onChange: (v: FanPowerType) => void;
+  name: string;
+}) => (
+  <div className="pills">
+    {(["AC", "DC"] as FanPowerType[]).map((opt) => (
+      <label key={opt} style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+        <input type="radio" name={name} value={opt} checked={value === opt} onChange={(e) => onChange(e.target.value as FanPowerType)} />
+        <span>{opt}</span>
+      </label>
+    ))}
+  </div>
+);
+
 /* ---------------- Data helpers ---------------- */
 
 const tripRows: { key: TripKey; label: string }[] = [
@@ -198,6 +245,12 @@ function defaultFormData(): FormData {
       eo5CloseMax: "N/A",
       eo5OpenMax: "N/A",
       eo2AntiPump: "N/A",
+      /* NEW defaults */
+      eo2ndCloseMin: "N/A",
+      eo2ndCloseMax: "N/A",
+      fanApplyProgram: "N/A",
+      fanType: "",
+      fanRun60s: "N/A",
     },
     section6: { maxPickup: "N/A", maxDropout: "N/A", timeDelay: "N/A" },
     section7: { rows: [{ label: "", a: null, b: null, c: null }] },
@@ -582,7 +635,7 @@ export default function App() {
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const content = await page.getTextContent();
-        text += content.items.map((it: any) => ("str" in it ? it.str : (it as any).toString())).join(" ");
+        text += (content.items as any[]).map((it: any) => ("str" in it ? it.str : (it as any).toString())).join(" ");
         text += "\n";
       }
       let jsonStr = tryMarkerPayload(text) || decodeZWFromText(text) || tryLegacyDataBlock(text);
@@ -615,7 +668,9 @@ export default function App() {
 
   const footer = { doc: DOC_NUMBER, rev: data.header.revision ?? "", date: data.header.revDate ?? "" };
 
-  /* --------- Split content into pages (align sections with page numbers) --------- */
+  /* --------- Pages: one numbered section per page --------- */
+
+  // PAGE 1: Header + Section 1 (1, 1.1, 1.2)
   const page1 = (
     <>
       {/* Screen header / actions (hidden in print via .print-hide) */}
@@ -644,7 +699,6 @@ export default function App() {
         <h1 className="h1" style={{ marginTop: 10 }}>
           Emax Testing Report
         </h1>
-        
 
         <div className="grid grid-4" style={{ marginTop: 10 }}>
           <div>
@@ -707,13 +761,18 @@ export default function App() {
         <h2 className="h1" style={{ fontSize: 18 }}>1.2 AC Hi-Pot Testing of charging motor – 1000 VAC for 1 minute</h2>
         <PFN value={data.section1_2} onChange={(v) => update("section1_2", v)} name="s12" />
       </div>
+    </>
+  );
 
+  // PAGE 2: Section 2
+  const page2 = (
+    <>
       <TripTable section2={data.section2} update={update} />
     </>
   );
 
-  // Page 2: sections 3..11 + comments/signoff
-  const page2 = (
+  // PAGE 3: Section 3
+  const page3 = (
     <>
       <div className="card">
         <h2 className="h1" style={{ fontSize: 18 }}>3. Fusible Breakers</h2>
@@ -724,7 +783,12 @@ export default function App() {
           </div>
         </div>
       </div>
+    </>
+  );
 
+  // PAGE 4: Section 4
+  const page4 = (
+    <>
       <div className="card">
         <h2 className="h1" style={{ fontSize: 18 }}>4. Manually Operated (MO) Breakers</h2>
         <div className="row">
@@ -740,9 +804,15 @@ export default function App() {
           </div>
         </div>
       </div>
+    </>
+  );
 
+  // PAGE 5: Section 5
+  const page5 = (
+    <>
       <div className="card">
         <h2 className="h1" style={{ fontSize: 18 }}>5. Electrically Operated (EO) Breakers</h2>
+
         {([
           ["5.1 2 Manual Ops", "eo2Manual"],
           ["5.2 5 Charging Ops at Minimum Voltage", "eo5ChargeMin"],
@@ -760,8 +830,75 @@ export default function App() {
             </div>
           </div>
         ))}
-      </div>
 
+        {/* 5.9 */}
+        <div className="row">
+          <div style={{ gridColumn: "span 2" }}>
+            <Label>5.9 2nd Close Coil Operation at Minimum Voltage</Label>
+            <PFN
+              value={data.section5.eo2ndCloseMin}
+              onChange={(v) => update("section5.eo2ndCloseMin", v)}
+              name="s59"
+            />
+          </div>
+        </div>
+
+        {/* 5.10 */}
+        <div className="row">
+          <div style={{ gridColumn: "span 2" }}>
+            <Label>5.10 2nd Close Coil Operation at Maximum Voltage</Label>
+            <PFN
+              value={data.section5.eo2ndCloseMax}
+              onChange={(v) => update("section5.eo2ndCloseMax", v)}
+              name="s510"
+            />
+          </div>
+        </div>
+
+        {/* 5.11 Fan Operation */}
+        <div className="row" style={{ borderTop: "1px solid #eee", paddingTop: 8, marginTop: 8 }}>
+          <div style={{ gridColumn: "span 2" }}>
+            <h3 className="h1" style={{ fontSize: 16, margin: "4px 0 8px" }}>5.11 Fan Operation</h3>
+          </div>
+
+          {/* 5.11 (a) apply program yes/no/n/a */}
+          <div style={{ gridColumn: "span 2" }}>
+            <Label>Apply program</Label>
+            <YesNoNAGroup
+              value={data.section5.fanApplyProgram}
+              onChange={(v) => update("section5.fanApplyProgram", v)}
+              name="s511_apply"
+            />
+          </div>
+
+          {/* 5.11 (b) fan AC / DC */}
+          <div style={{ gridColumn: "span 2" }}>
+            <Label>Fan power type</Label>
+            <div className="subtle" style={{ marginBottom: 4 }}>See if fans are AC or DC</div>
+            <FanTypeGroup
+              value={data.section5.fanType}
+              onChange={(v) => update("section5.fanType", v)}
+              name="s511_type"
+            />
+          </div>
+
+          {/* 5.11 (c) run test for 60s pass/fail/n/a */}
+          <div style={{ gridColumn: "span 2" }}>
+            <Label>Run test for 60s</Label>
+            <PFN
+              value={data.section5.fanRun60s}
+              onChange={(v) => update("section5.fanRun60s", v)}
+              name="s511_run"
+            />
+          </div>
+        </div>
+      </div>
+    </>
+  );
+
+  // PAGE 6: Section 6
+  const page6 = (
+    <>
       <div className="card">
         <h2 className="h1" style={{ fontSize: 18 }}>6. Undervoltage Device (If equipped)</h2>
         {([
@@ -777,7 +914,12 @@ export default function App() {
           </div>
         ))}
       </div>
+    </>
+  );
 
+  // PAGE 7: Section 7
+  const page7 = (
+    <>
       <div className="card">
         <h2 className="h1" style={{ fontSize: 18 }}>7. Contact Resistance Test</h2>
         <div style={{ overflowX: "auto" }}>
@@ -837,7 +979,12 @@ export default function App() {
           </ul>
         </div>
       </div>
+    </>
+  );
 
+  // PAGE 8: Section 8
+  const page8 = (
+    <>
       <div className="card">
         <h2 className="h1" style={{ fontSize: 18 }}>8. Racking Operations – Position Stop Verification</h2>
         {([
@@ -855,12 +1002,22 @@ export default function App() {
           </div>
         ))}
       </div>
+    </>
+  );
 
+  // PAGE 9: Section 9
+  const page9 = (
+    <>
       <div className="card">
         <h2 className="h1" style={{ fontSize: 18 }}>9. Visual inspection of rating interference/interlock</h2>
         <PFN value={data.section9.visual} onChange={(v) => update("section9.visual", v)} name="s9" />
       </div>
+    </>
+  );
 
+  // PAGE 10: Section 10
+  const page10 = (
+    <>
       <div className="card">
         <h2 className="h1" style={{ fontSize: 18 }}>10. Verify secondary wiring by continuity per breaker-specific wiring diagram</h2>
         <div className="row">
@@ -874,7 +1031,12 @@ export default function App() {
           </div>
         </div>
       </div>
+    </>
+  );
 
+  // PAGE 11: Section 11
+  const page11 = (
+    <>
       <div className="card">
         <h2 className="h1" style={{ fontSize: 18 }}>11. Outgoing Operations Counter Reading</h2>
         <div className="row">
@@ -884,7 +1046,12 @@ export default function App() {
           </div>
         </div>
       </div>
+    </>
+  );
 
+  // PAGE 12: Comments + Signoff
+  const page12 = (
+    <>
       <div className="card" style={{ marginBottom: 40 }}>
         <h2 className="h1" style={{ fontSize: 18 }}>Additional Testing / Comments</h2>
         <TextArea value={data.comments} onChange={(e: any) => update("comments", e.target.value)} rows={6} placeholder="Add any additional testing notes, observations, or comments here." />
@@ -913,7 +1080,7 @@ export default function App() {
     </>
   );
 
-  const pages = [page1, page2];
+  const pages = [page1, page2, page3, page4, page5, page6, page7, page8, page9, page10, page11, page12];
 
   return (
     <div className="container">
