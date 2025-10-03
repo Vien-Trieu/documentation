@@ -1,3 +1,6 @@
+/* Optional Google Font for signature (remove if you prefer no external fonts) */
+@import url('https://fonts.googleapis.com/css2?family=Great+Vibes&display=swap');
+
 :root {
   --bg: #f5f5f5;
   --card: #fff;
@@ -193,7 +196,6 @@ body {
 }
 
 /* ===================== PAGE LAYOUT HELPERS ===================== */
-/* Optional: Screen preview for page boxes */
 @media screen {
   .print-page {
     max-width: 8.5in;
@@ -205,7 +207,6 @@ body {
       0 6px 18px rgba(0, 0, 0, 0.06);
     border-radius: 6px;
 
-    /* Make footer sit at the bottom of the page box */
     display: flex;
     flex-direction: column;
     min-height: 11in; /* show a letter-sized page preview */
@@ -225,10 +226,9 @@ body {
   }
 }
 
-/* Control the physical printed page */
 @page {
-  size: 8.5in 11in; /* Letter */
-  margin: 12mm; /* Printer margins */
+  size: 8.5in 11in;
+  margin: 12mm;
 }
 
 @media print {
@@ -245,10 +245,8 @@ body {
     display: none !important;
   }
 
-  /* Force a hard page break after each numbered section wrapper */
   .print-page {
-    /* keep footer at bottom and content above */
-    display: block; /* block is safest for print engines */
+    display: block;
     break-after: page; /* modern */
     page-break-after: always; /* legacy */
     box-shadow: none !important;
@@ -260,7 +258,6 @@ body {
     page-break-after: auto;
   }
 
-  /* Keep related content together — avoids headings or tables splitting */
   .print-content,
   .card,
   .row,
@@ -272,7 +269,6 @@ body {
     page-break-inside: avoid;
   }
 
-  /* Tables: tighter borders on print & no rounded corners */
   .table {
     border-radius: 0;
     overflow: visible;
@@ -289,7 +285,7 @@ body {
   }
 }
 
-/* ---- (Keep the more specific table overrides used by Section1/Trip) ---- */
+/* ---- More specific table overrides ---- */
 .table {
   width: 100%;
   border-collapse: collapse;
@@ -309,4 +305,25 @@ body {
 }
 .table .center {
   text-align: center;
+}
+
+/* ==== Cursive signature input ==== */
+.signature-input {
+  font-family:
+    'Great Vibes', 'Pacifico', 'Dancing Script', 'Brush Script MT',
+    'Segoe Script', 'Lucida Handwriting', cursive !important;
+  font-size: 26px;
+  line-height: 1.2;
+  letter-spacing: 0.3px;
+}
+.signature-input::placeholder {
+  font-family: inherit;
+  font-style: italic;
+  opacity: 0.6;
+}
+@media print {
+  .signature-input {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
 }

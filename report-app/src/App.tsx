@@ -2,7 +2,7 @@
  * Author: Vien Trieu
  * Date: 2024-08-31
  * Description: Main App component for the LV RIR Breaker Production Testing Form.
- * Date modified: 2025-10-01
+ * Date modified: 2025-10-03
  */
 
 import { useMemo, useRef, useState } from 'react';
@@ -116,6 +116,8 @@ const TextInput = ({
   required = false,
   hasError = false,
   inputRef,
+  className, // allow custom class (e.g., cursive signature)
+  style, // optional inline styles
 }: any) => (
   <input
     id={id}
@@ -123,9 +125,10 @@ const TextInput = ({
     value={value}
     onChange={onChange}
     placeholder={placeholder}
-    className={`input${hasError ? ' input-error' : ''}`}
+    className={`input${hasError ? ' input-error' : ''} ${className ?? ''}`}
     type={type}
     aria-required={required}
+    style={style}
   />
 );
 
@@ -1006,8 +1009,7 @@ export default function App() {
             Reset
           </button>
         </div>
-      </div>{' '}
-      {/* closes .header */}
+      </div>
       <Section1Table
         data={data.section1}
         update={update}
@@ -1193,7 +1195,7 @@ export default function App() {
     </>
   );
 
-  // PAGE 4: Section 6 + Section 7
+  // PAGE 4: Section 6 + Section 7 + Section 8 (8 moved up under 7)
   const page4 = (
     <>
       <div className="card">
@@ -1318,12 +1320,8 @@ export default function App() {
           </ul>
         </div>
       </div>
-    </>
-  );
 
-  // PAGE 5: Sections 8 + 9 + 10 + 11
-  const page5 = (
-    <>
+      {/* 8 moved here, directly below 7 */}
       <div className="card">
         <h2 className="h1" style={{ fontSize: 18 }}>
           8. Racking Operations – Position Stop Verification
@@ -1364,7 +1362,12 @@ export default function App() {
           </div>
         ))}
       </div>
+    </>
+  );
 
+  // PAGE 5: Sections 9 + 10 + 11 + Comments + Signoff (moved under 11)
+  const page5 = (
+    <>
       <div className="card">
         <h2 className="h1" style={{ fontSize: 18 }}>
           9. Visual inspection of rating interference/interlock
@@ -1416,12 +1419,8 @@ export default function App() {
           </div>
         </div>
       </div>
-    </>
-  );
 
-  // PAGE 6: Comments + Signoff
-  const page6 = (
-    <>
+      {/* --- Comments and Signoff directly below 11 --- */}
       <div className="card" style={{ marginBottom: 40 }}>
         <h2 className="h1" style={{ fontSize: 18 }}>
           Additional Testing / Comments
@@ -1457,8 +1456,10 @@ export default function App() {
           <div>
             <Label>Signature (type name)</Label>
             <TextInput
+              className="signature-input" // cursive signature styling
               value={data.signoff.signature}
               onChange={(e: any) => update('signoff.signature', e.target.value)}
+              placeholder="Sign here"
             />
           </div>
         </div>
@@ -1470,7 +1471,7 @@ export default function App() {
     </>
   );
 
-  const pages = [page1, page2, page3, page4, page5, page6];
+  const pages = [page1, page2, page3, page4, page5];
 
   return (
     <div className="container">
